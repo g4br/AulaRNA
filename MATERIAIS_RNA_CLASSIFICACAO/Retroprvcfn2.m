@@ -1,0 +1,131 @@
+function [wh,bh,ws,bs,J,EQ,EV,TX,DE]=Retroprvcfn2(pt,tt,ptv,ttv,Ah,Dh,As,Ds,nh,Cic,Prc,Mom)
+
+    %ALGORITMO RETROPROPAGATIVO PARA TREINAMENTO DE REDES NEURAIS ARTIFICIAIS
+    %COM VALIDAÇÃO CRUZADA.
+    %CRIADO POR GUILHERME GARCIA DE OLIVEIRA
+    %ÚLTIMA ATUALIZAÇÃO: 20/10/2023.
+    %
+    %DESCRIÇÃO:
+    %
+    %APLICAÇÃO: Redes com ativações uniformes em cada camada, sendo "h" a camada intermediária, e "s" a de saída. 
+    %
+    %PARÂMETROS DE ENTRADA:
+    %pt = Amostras para treinamento transformadas, cada linha um atributo, cada coluna uma amostra.
+    %tt = Saídas das amostras de treinamento transformadas, cada linha um atributo, cada coluna uma amostra.
+    %ptv = Amostras para validação transformadas, cada linha um atributo, cada coluna uma amostra.
+    %ttv = Saídas das amostras de validação transformadas, cada linha um atributo, cada coluna uma amostra.
+    %Ah, Dh, As, Ds = "inlines" das ativações e respectivas derivadas, das camadas h e s, respectivamente.
+    %nh = Número de neurônios na camada intermediária.
+    %Cic = Número máximo de ciclos do procedimento iterativo.
+    %Prc = Aproximação aceitável para o maior erro absoluto em um ciclo. 
+    %Mom = Termo de inércia.
+    %
+    %RESULTADOS:
+    %wh,bh,ws,bs = Pesos sinápticos finais.
+    %EQ,EV,TX,DE = Vetores com as raízes dos erros quadráticos médios (treinamento e validação), as taxas de aprendizado e as médias das derivadas das funções de ativação.
+    %J = número de ciclos para obtenção do melhor resultado
+    
+
+    %Definições e Inicializações:
+    [natr,nexe]=size(pt); 
+    nneu=size(tt,1); 
+    [wh,bh,ws,bs]=iniciaisfn(nh,pt,tt);
+    U=ones(1,nexe);
+    taxa=0.01;
+    ciclo=1; 
+    TX=zeros(1,Cic); 
+    ME=zeros(1,Cic); 
+    DE=zeros(1,Cic);
+    h=wh*pt+bh*U; 
+    a=As(ws*h+bs*U);
+    e=tt-a;
+    ME(ciclo)=mean(mean(abs(e))); 
+    TX(ciclo)=taxa; 
+
+    %Treinamento:
+    [dwh,dbh,dws,dbs]=deal(zeros(size(wh)),zeros(size(bh)),zeros(size(ws)),zeros(size(bs)));
+    Dc=ones(1,size(ttv,2));
+    ec=ttv-As(ws*Ah(wh*ptv+bh*Dc)+bs*Dc);
+    ec2=ec.^2; 
+    EX=((sum(sum(ec2)))/(size(ec2,2)))^0.5;
+
+    while max(abs(e)')'>=Prc, ciclo=ciclo+1;
+        if ciclo>=Cic,
+            break,
+        end
+
+         %ciclo, close all, subplot(1,2,1), plot(ttv,'k'), hold on,
+         %plot(As(ws*Ah(wh*ptv+bh*Dc)+bs*Dc),'b'), hold on,        
+         %subplot(1,2,2), plot(ec,'r'), pause(0.4),
+
+    %Atualização dos pesos sinápticos:
+    [Wh,Bh,Ws,Bs,De]=atualizafn(wh,bh,ws,bs,pt,h,a,e,Dh,Ds,taxa,U);
+    [Wh,Bh,Ws,Bs]=deal(Wh+Mom.*dwh,Bh+Mom.*dbh,Ws+Mom.*dws,Bs+Mom.*dbs);
+
+    %Julgamento dos novos pesos e atualização da taxa heurística:
+    H=Ah(Wh*pt+Bh*U); A=As(Ws*H+Bs*U); E=tt-A; E2=E.^2;
+    EQ(ciclo)=((sum(sum(E2)))/(size(E,2)))^0.5;
+    DE(ciclo)=De;
+    TX(ciclo)=taxa;
+        if EQ(ciclo)<=EQ(ciclo-1)
+        [dwh,dbh,dws,dbs]=deal(Wh-wh,Bh-bh,Ws-ws,Bs-bs);
+        [wh,bh,ws,bs,h,a,e,taxa]=deal(Wh,Bh,Ws,Bs,H,A,E,taxa*1.1);
+        else
+        taxa=max(taxa*0.5,0.01);
+        end
+        if max(abs(e)')'<=Prc,
+            break,
+        end
+
+    %Estatísticas de validação :
+    ec=ttv-As(Ws*Ah(Wh*ptv+Bh*Dc)+Bs*Dc);
+    ec2=ec.^2; 
+    EV(ciclo)=((sum(sum(ec2)))/(size(ec2,2)))^0.5;
+        if EV(ciclo)<EX, EX=EV(ciclo);
+        [Wx,Bx,Wy,By,J]=deal(Wh,Bh,Ws,Bs,ciclo);
+        end
+    end
+
+    DE(1)=DE(2);
+    EQ=nonzeros(EQ)';
+    TX=nonzeros(TX)';
+    DE=nonzeros(DE)';
+    EV=nonzeros(EV)'; 
+    DE=DE./nneu;
+    [wh,bh,ws,bs]=deal(Wx,Bx,Wy,By);
+return
+
+function [wh,bh,ws,bs]=iniciaisfn(nh,pt,tt)
+%[wh,bh,ws,bs] = iniciaisfn(nh,pt,tt)
+% Inicialização dos pesos sinápticos de uma rede de uma ou duas camadas.
+   
+    if (nargin>=2)&(nargout==2)
+        natr=size(pt,1); pmax=max(max(abs(pt)));
+        wh=(rand(nh,natr).*2-1)./(natr*pmax);
+        bh=(rand(nh,1).*2-1)./(natr*pmax);
+    elseif (nargin==3)&(nargout==4)
+        natr=size(pt,1); pmax=max(max(abs(pt)));
+        ns=size(tt,1);
+        wh=(rand(nh,natr).*2-1)./(natr*pmax);
+        bh=(rand(nh,1).*2-1)./(natr*pmax);
+        ws=(rand(ns,nh).*2-1)./(nh);
+        bs=(rand(ns,1).*2-1)./(nh);
+    else
+        error('Acionamento incorreto da função!')
+    end
+return
+
+function [Wh,Bh,Ws,Bs,De]=atualizafn(wh,bh,ws,bs,pt,h,a,e,Dh,Ds,taxa,U)
+    %[Wh,Bh,Ws,Bs,De]=atualizafn(wh,bh,ws,bs,pt,h,a,e,Dh,Ds,taxa,U)
+    % Atualização dos pesos sinápticos de uma rede neural artificial.
+
+    derivada_s=Ds(a); 
+    derivada_h=Dh(h); 
+    delta_s=e.*derivada_s;
+    delta_h=(ws'*delta_s).*derivada_h;
+    Ws=ws+taxa*delta_s*h'; 
+    Bs=bs+taxa*delta_s*U';
+    Wh=wh+taxa*delta_h*pt'; 
+    Bh=bh+taxa*delta_h*U';
+    De=sum(sum(derivada_s))+sum(sum(derivada_h));
+return

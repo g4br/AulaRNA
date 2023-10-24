@@ -1,0 +1,200 @@
+% SCRIPT PARA CLASSIFICAÇÃO COM REDES NEURAIS ARTIFICIAIS:
+% INCLUI:
+% - DIVISÃO ALEATÓRIA DAS AMOSTRAS
+% - TRANSFORMAÇÃO DOS DADOS DE ENTRADA (ESCALONAMENTO POR NORMALIZAÇÃO)
+% - TREINAMENTO PELO ALGORITMO RETROPROPAGATIVO (BACKPROPAGATION)
+% - VALIDAÇÃO CRUZADA PARA EVITAR SUPERAJUSTAMENTO DA REDE
+% - ARMAZENAMENTO DOS RESULTADOS E RECURSOS DE PLOTAGEM
+% CRIADO POR: Guilherme Garcia de Oliveira
+% ATUALIZADO EM: 20/10/2023, 14:00.
+
+clear all
+close all
+clc 
+tic
+disp('Carregando dados...')
+
+% -----------------------------------------------------------------------%
+% -----------------------------------------------------------------------%
+% DEFINIÇÕES DO USUÁRIO: nesta seção você deve fazer alterações para
+% carregar corretamente seus dados amostrais (em formato de tabela), a
+% imagem que será classificada, bem como indicar a complexidade e outras
+% definições do modelo de RNA.
+
+% INDIQUE SE DESEJA USAR O EXCEL PARA CARREGAR OS DADOS:
+Excel=1; % usar 0 se não possui Excel instalado, usar 1 se tiver!
+
+% CARREGAR CONJUNTO AMOSTRAL (INPUTS+OUTPUTS): espera-se que você carregue
+% todas as suas amostras, em que cada linha da tabela corresponde a um
+% pixel ou objeto amostrado sobre a imagem, cada coluna da tabela
+% corresponde a uma variável do modelo (primeiro as explicativas, depois as
+% dependentes). Não carregar cabeçalho. Não pode ter células vazias no
+% intervalo carregado.
+if Excel==1
+    DADOS=xlsread('AMOSTRAS.xlsx', 'AMOSTRAS', 'C2:N2882');
+else
+    load AMOSTRAS
+end
+
+% CARREGAR IMAGEM A SER CLASSIFICADA:
+% carregar a imagem que será classificada, com bandas organizadas na mesma
+% sequência das colunas da tabela de amostra.
+NomeIMG='L08_OLI_220081_20210525_B234567_REC.tif';
+IMG=double(imread(NomeIMG)); [A,R]=geotiffread(NomeIMG);
+
+% DEFINIÇÕES GERAIS DA REDE NEURAL:
+input=6; %número de variáveis de entrada
+nclass=6; %número de classes da variável dependente
+nh=7; %número de neurônios na camada oculta da rede
+nit=5; %iterações: número de inicializações da rede
+Cic=20000; %ciclos: número máximo de ciclos de aprendizagem
+ptreina=0.7; %proporção de amostras para treinamento
+pteste=0.15; %proporção de amostras para teste
+f=0; %proporção de extrapolação possível na saída da RNA
+file='RNACLASS.mat'; %nome do arquivo MATLAB para salvar seus resultados
+Nomefig='CLASS_BOA.tif'; %nome da imagem classificada
+
+% FIM DAS DEFINIÇÕES DO USUÁRIO
+% -----------------------------------------------------------------------%
+% -----------------------------------------------------------------------%
+
+disp('Carregamento de dados concluída!')
+
+% INÍCIO DO PROCESSAMENTO DE DADOS:
+% ETAPA DE DIVISÃO ALEATÓRIA DAS AMOSTRAS:
+disp('Dividindo amostras...')
+div=rand(size(DADOS,1),1); %cria uma matriz de números aleatórios entre 0 e 1
+treina=[]; valida=[]; verifica=[]; %esvazia matrizes de treinamento, validação e teste
+for i=1:size(DADOS,1)
+    if div(i)<=ptreina
+        treina=[treina; DADOS(i,:)]; %#ok<AGROW>
+    elseif div(i)>1-pteste
+        verifica=[verifica; DADOS(i,:)]; %#ok<AGROW>
+    else
+        valida=[valida; DADOS(i,:)]; %#ok<AGROW>
+    end
+end
+
+% FUNÇÕES PRONTAS - INLINES:
+unisig=inline('1./(1+exp(-n))'); %função de ativação - sigmoide
+dunisig=inline('max(a.*(1-a),0.01)'); %função derivada para retropropagação dos erros
+limsup=inline('max(v,[],2)+(max(v,[],2)-min(v,[],2)).*f','v','f'); %função que calcula o limite superior dos outputs 
+liminf=inline('min(v,[],2)-(max(v,[],2)-min(v,[],2)).*f','v','f'); %função que calcula o limite inferior dos outputs
+esclin=inline('(v-b*u)./(a*u)','v','a','b','u'); %função que transforma (reescalona) os dados de entrada
+reclin=inline('(a*u).*s+b*u','s','a','b','u'); %função que converte saída escalonada em valores reais
+
+% SEPARAÇÃO ENTRE MATRIZES DE INPUTS E OUTPUTS POR DIVISÃO DE AMOSTRAS:
+Pt=treina(:,1:input)'; Tt=treina(:,input+1:end)';
+Ptv=valida(:,1:input)'; Ttv=valida(:,input+1:end)';
+Pv=verifica(:,1:input)'; Tv=verifica(:,input+1:end)';
+Ptot=DADOS(:,1:input)'; Ttot=DADOS(:,input+1:end)';
+
+% OUTRAS DEFINIÇÕES:
+EQmin=1000000000000000; Prc=0.001; Mom=0;
+As=unisig; Ds=dunisig; Ah=unisig; Dh=dunisig; %chama funções de ativação e derivada 
+Ut=ones(1,size(Pt,2)); Utv=ones(1,size(Ptv,2));
+Uv=ones(1,size(Pv,2)); Utot=ones(1,size(Ptot,2)); %cria matrizes de 1 - garante a operação de matrizes
+
+% TRANSFORMAÇÃO DOS DADOS (ESCALONAMENTO):
+disp('Realizando o escalonamento dos dados...')
+nlin=size(IMG,1); ncol=size(IMG,2); npix=nlin*ncol; nb=size(IMG,3);
+mIMG=reshape(IMG,npix,nb)'; ae=std(mIMG,[],2); be=mean(mIMG,2);
+ls=limsup(Tt,f); li=liminf(Tt,f); au=ls-li; bu=li;
+pt=esclin(Pt,ae,be,Ut); ptv=esclin(Ptv,ae,be,Utv);
+pv=esclin(Pv,ae,be,Uv); ptot=esclin(Ptot,ae,be,Utot);
+tt=esclin(Tt,au,bu,Ut); ttv=esclin(Ttv,au,bu,Utv);
+tv=esclin(Tv,au,bu,Uv); ttot=esclin(Ttot,au,bu,Utot);
+
+% TREINAMENTO COM REDES NEURAIS ARTIFICIAIS:
+disp('Iniciando o treinamento da rede neural artificial...')
+for i=1:nit
+    [wh,bh,ws,bs,J,EQ,EV,TX,DE]=Retroprvcfn2(pt,tt,ptv,ttv,Ah,Dh,As,Ds,nh,Cic,Prc,Mom);
+    if EQ(:,end)<EQmin, EQmin=EQ(:,end); %só salva os resultados se RNA melhorou em relação à iteração anterior
+        save(file,'wh','bh','ws','bs','J','EQ','EV','TX','DE','ae','be','au','bu'),
+    end
+    format bank, disp([num2str(i/nit*100),'% CONCLUÍDO']),        
+end
+disp('Rede neural artificial treinada!')
+
+% CLASSIFICAÇÃO DAS AMOSTRAS E CÁLCULO DA MATRIZ DE CONFUSÃO:
+disp('Gerando matriz de confusão...')
+load(file),      
+Tctot=reclin(As(ws*Ah(wh*ptot+bh*Utot)+bs*Utot),au,bu,Utot); %roda RNA treinada para a totalidade das amostras
+Tc=reclin(As(ws*Ah(wh*pv+bh*Uv)+bs*Uv),au,bu,Uv); %roda RNA treinada para amostras de teste
+Mtot=max(Ttot,[],1); Mctot=max(Tctot,[],1);
+Mtst=max(Tv,[],1); Mctst=max(Tc,[],1);
+ClasTot=zeros(size(Ttot,2),2); ClasTst=zeros(size(Tv,2),2);
+MatrixTot=zeros(nclass,nclass); MatrixTst=MatrixTot;
+for i=1:size(Ttot,2)
+    %classifica todas as amostras em classes de 1 até nclass
+    ClasTot(i,1)=find(Ttot(:,i)==Mtot(i)); ClasTot(i,2)=find(Tctot(:,i)==Mctot(i));
+    %gera a matriz de confusão considerando a totalidade das amostras
+    MatrixTot(ClasTot(i,1),ClasTot(i,2))=MatrixTot(ClasTot(i,1),ClasTot(i,2))+1;
+end
+for i=1:size(Tv,2)
+    %classifica as amostras de teste em classes de 1 até nclass
+    ClasTst(i,1)=find(Tv(:,i)==Mtst(i)); ClasTst(i,2)=find(Tc(:,i)==Mctst(i));
+    %gera a matriz de confusão considerando apenas amostras de teste
+    MatrixTst(ClasTst(i,1),ClasTst(i,2))=MatrixTst(ClasTst(i,1),ClasTst(i,2))+1;
+end
+
+% ACURÁCIA DA CLASSIFICAÇÃO E ÍNDICE KAPPA:
+disp('Calculando acurácia e índice Kappa...')
+AcertosTot=0; AcertosTst=0; k2Tot=0; k2Tst=0;
+AmTot=size(ClasTot,1); AmTst=size(ClasTst,1);
+SomaClasTot=sum(MatrixTot); SomaRefTot=sum(MatrixTot,2);
+SomaClasTst=sum(MatrixTst); SomaRefTst=sum(MatrixTst,2);
+for i=1:nclass
+    % computa os acertos de classificação:
+    AcertosTot=AcertosTot+MatrixTot(i,i);
+    AcertosTst=AcertosTst+MatrixTst(i,i);
+    % calcula o parâmetro k2 do índice kappa:
+    k2Tot=k2Tot+(SomaClasTot(i)/AmTot)*(SomaRefTot(i)/AmTot);
+    k2Tst=k2Tst+(SomaClasTst(i)/AmTst)*(SomaRefTst(i)/AmTst);
+end
+ACCTot=AcertosTot/AmTot; ACCTst=AcertosTst/AmTst; %computa a acurácia
+KappaTot=(ACCTot-k2Tot)/(1-k2Tot); KappaTst=(ACCTst-k2Tst)/(1-k2Tst); %computa o kappa
+
+% CLASSIFICAÇÃO DA IMAGEM DE SATÉLITE:
+disp('Classificando imagem de satélite e salvando TIF...')
+Uimg=ones(1,size(mIMG,2)); %cria matriz de 1 para usar a RNA em toda a imagem
+Eimg=esclin(mIMG,ae,be,Uimg); %escalona os valores de todos os pixels da imagem a ser classificada
+Cimg=reclin(As(ws*Ah(wh*Eimg+bh*Uimg)+bs*Uimg),au,bu,Uimg); %calcula as saídas da RNA para todos os pixels da imagem
+Mimg=max(Cimg,[],1); Clasimg=zeros(1,size(Cimg,2));
+for i=1:size(Cimg,2)
+    Clasimg(i)=find(Cimg(:,i)==Mimg(i)); %classifica a imagem em classes de 1 a nclass    
+end
+CLASS=reshape(Clasimg,nlin,ncol,1); %gera a imagem classificada em forma de matriz
+%geotiffwrite(Nomefig,CLASS,R,'CoordRefSysCode',32722); % salva imagem classifica em TIF
+CLASSint = int8(CLASS);
+
+% criando po filtro de maiores ocororrencias
+for i=2:nlin-2
+    for j=2:ncol-2
+        movel_window = CLASSint(i-1:i+1,j-1:j+1);
+        for k=1:nclass
+            counter(k) = size(find(movel_window==k),1);
+        end
+    end
+end
+
+geotiffwrite(Nomefig,CLASSint,R,'CoordRefSysCode',32722); % salva imagem classifica em TIF
+
+
+% MOSTRA NA TELA OS PRINCIPAIS RESULTADOS, SALVA E FINALIZA PROGRAMA:
+disp('RESUMO: PRINCIPAIS RESULTADOS DO PROCESSO DE CLASSIFICAÇÃO:')
+disp(['Número de inputs: ',num2str(input)])
+disp(['Número de neurônios na camada oculta: ',num2str(nh)])
+disp(['Número de inicializações da rede (iterações): ',num2str(nit)])
+disp(['Número máximo de ciclos de aprendizagem: ',num2str(Cic)])
+disp(['Número de ciclos para convergência: ',num2str(J)])
+disp('Matriz de confusão (todas as amostras):')
+disp(MatrixTot)
+disp('Matriz de confusão (amostras de teste):')
+disp(MatrixTst)
+disp(['Acurácia Global (todas as amostras): ',num2str(ACCTot)])
+disp(['Acurácia Global (amostras de teste): ',num2str(ACCTst)])
+disp(['Índice Kappa (todas as amostras): ',num2str(KappaTot)])
+disp(['Índice Kappa (amostras de teste): ',num2str(KappaTst)])
+save(file) %salva arquivo .MAT com todos os arquivos gerados no processo de modelagem e classificação
+toc
